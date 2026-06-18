@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * Qwen browser auth — HTTP-сервер + SSH-туннель + букмарклет.
+ * Qwen browser auth — HTTP-сервер + SSH-туннель.
  *
  * Запустите на сервере:
  *   node scripts/qwen_browser_auth.js
  *
- * Скрипт выведет SSH-команду и ссылку. Откройте страницу, перетащите
- * кнопку в закладки, войдите в Qwen, кликните закладку — готово.
+ * Скрипт выведет SSH-команду и ссылку. Откройте страницу на своём ПК,
+ * следуйте инструкциям — скопируйте токен из Qwen и вставьте в форму.
  *
  * ENV:
  *   QWEN_AUTH_PORT     — порт HTTP-сервера (default: 9336)
@@ -28,8 +28,8 @@ const SESSION_DIR = path.join(ROOT, 'session');
 const ACCOUNTS_DIR = path.join(SESSION_DIR, 'accounts');
 const TOKENS_FILE = path.join(SESSION_DIR, 'tokens.json');
 
-function buildHtml(p) {
-  const bookmarklet = `javascript:(function(){var t=localStorage.getItem('active_token');if(!t||!t.startsWith('eyJ')){alert('Токен не найден. Убедитесь, что вы вошли в аккаунт Qwen.');return;}fetch('http://localhost:${p}/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:t})}).then(function(r){return r.json();}).then(function(d){if(d.ok){alert('\\u2705 Токен сохранён! '+d.id);}else{alert('Ошибка: '+(d.error||'?'));}}).catch(function(e){alert('Ошибка соединения с localhost:${p} — '+e.message);});})();`;
+function buildHtml() {
+  const consoleCode = `copy(localStorage.getItem('active_token'))`;
 
   return `<!DOCTYPE html>
 <html lang="ru">
@@ -40,21 +40,27 @@ function buildHtml(p) {
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#e0e0e0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}
-  .card{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:14px;padding:32px;max-width:500px;width:100%}
+  .card{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:14px;padding:32px;max-width:520px;width:100%}
   h1{font-size:1.25rem;color:#fff;margin-bottom:4px}
   .sub{color:#666;font-size:.8rem;margin-bottom:28px}
   .step{display:flex;gap:14px;margin-bottom:22px}
-  .num{background:#222;border:1px solid #333;border-radius:50%;width:28px;height:28px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:.75rem;color:#888;margin-top:1px}
+  .num{background:#222;border:1px solid #333;border-radius:50%;width:28px;height:28px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:.75rem;color:#888;margin-top:2px}
   .step-body{flex:1}
   .step-body p{font-size:.875rem;line-height:1.5}
-  .step-body .hint{color:#666;font-size:.75rem;margin-top:4px}
+  .hint{color:#666;font-size:.75rem;margin-top:4px}
   a.qwen-link{display:inline-flex;align-items:center;gap:6px;background:#1d4ed8;color:#fff;text-decoration:none;border-radius:7px;padding:8px 14px;font-size:.825rem;margin-top:8px}
   a.qwen-link:hover{background:#2563eb}
-  a.bookmarklet{display:inline-flex;align-items:center;gap:8px;background:#7c3aed;color:#fff;text-decoration:none;border-radius:7px;padding:10px 16px;font-size:.875rem;cursor:grab;user-select:none;border:2px dashed #a78bfa;margin-top:8px}
-  a.bookmarklet:hover{background:#6d28d9}
-  .drag-hint{color:#a78bfa;font-size:.75rem;margin-top:6px}
-  .divider{border:none;border-top:1px solid #222;margin:4px 0 22px}
-  .status{margin-top:20px;padding:12px 16px;border-radius:8px;font-size:.85rem;display:none}
+  .code-block{display:flex;align-items:center;gap:8px;margin-top:8px}
+  code{background:#111;border:1px solid #333;border-radius:6px;padding:8px 12px;font-size:.8rem;color:#a78bfa;font-family:monospace;flex:1;word-break:break-all}
+  button.copy-btn{background:#333;border:1px solid #444;color:#ccc;border-radius:6px;padding:8px 12px;font-size:.75rem;cursor:pointer;white-space:nowrap}
+  button.copy-btn:hover{background:#444}
+  .divider{border:none;border-top:1px solid #222;margin:8px 0 22px}
+  textarea{width:100%;background:#111;border:1px solid #333;border-radius:8px;color:#e0e0e0;font-family:monospace;font-size:.8rem;padding:10px 12px;resize:vertical;min-height:80px;margin-top:8px}
+  textarea:focus{outline:none;border-color:#7c3aed}
+  button.submit-btn{width:100%;background:#7c3aed;color:#fff;border:none;border-radius:8px;padding:12px;font-size:.9rem;cursor:pointer;margin-top:10px}
+  button.submit-btn:hover{background:#6d28d9}
+  button.submit-btn:disabled{background:#333;color:#666;cursor:not-allowed}
+  .status{margin-top:16px;padding:12px 16px;border-radius:8px;font-size:.85rem;display:none}
   .status.ok{background:#14532d;border:1px solid #16a34a;color:#86efac;display:block}
   .status.err{background:#450a0a;border:1px solid #dc2626;color:#fca5a5;display:block}
 </style>
@@ -67,25 +73,29 @@ function buildHtml(p) {
   <div class="step">
     <div class="num">1</div>
     <div class="step-body">
-      <p>Перетащите эту кнопку в <strong>панель закладок</strong> браузера:</p>
-      <a class="bookmarklet" href="${bookmarklet}">📋 Qwen → сохранить токен</a>
-      <p class="drag-hint">↑ Тащите в закладки, не кликайте здесь</p>
-    </div>
-  </div>
-
-  <div class="step">
-    <div class="num">2</div>
-    <div class="step-body">
       <p>Откройте Qwen и войдите в аккаунт:</p>
       <a class="qwen-link" href="https://chat.qwen.ai" target="_blank">Открыть chat.qwen.ai ↗</a>
     </div>
   </div>
 
   <div class="step">
+    <div class="num">2</div>
+    <div class="step-body">
+      <p>Откройте консоль браузера (<strong>F12 → Console</strong>) и выполните:</p>
+      <div class="code-block">
+        <code id="code">${consoleCode}</code>
+        <button class="copy-btn" onclick="copyCode()">Скопировать</button>
+      </div>
+      <p class="hint">Токен будет скопирован в буфер обмена.</p>
+    </div>
+  </div>
+
+  <div class="step">
     <div class="num">3</div>
     <div class="step-body">
-      <p>На странице <strong>chat.qwen.ai</strong> нажмите закладку <em>«Qwen → сохранить токен»</em>.</p>
-      <p class="hint">Токен будет отправлен на сервер автоматически.</p>
+      <p>Вставьте токен сюда и нажмите <strong>Сохранить</strong>:</p>
+      <textarea id="tokenInput" placeholder="eyJ..."></textarea>
+      <button class="submit-btn" onclick="submitToken()">Сохранить токен</button>
     </div>
   </div>
 
@@ -93,17 +103,49 @@ function buildHtml(p) {
   <div id="status" class="status"></div>
 </div>
 <script>
-(function poll(){
-  fetch('/status').then(r=>r.json()).then(d=>{
-    if(d.done){
-      var s=document.getElementById('status');
-      s.className='status ok';
-      s.textContent='✅ Токен сохранён! Аккаунт: '+d.id+'. Можно закрыть вкладку.';
+function copyCode() {
+  var code = document.getElementById('code').textContent;
+  navigator.clipboard.writeText(code).then(function() {
+    var btn = document.querySelector('.copy-btn');
+    btn.textContent = 'Скопировано!';
+    setTimeout(function(){ btn.textContent = 'Скопировать'; }, 2000);
+  });
+}
+
+function submitToken() {
+  var token = document.getElementById('tokenInput').value.trim();
+  if (!token.startsWith('eyJ') || token.split('.').length !== 3) {
+    showStatus('err', 'Неверный формат токена. Убедитесь, что скопировали правильно.');
+    return;
+  }
+  var btn = document.querySelector('.submit-btn');
+  btn.disabled = true;
+  btn.textContent = 'Сохраняем...';
+  fetch('/save', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({token: token})
+  }).then(function(r){ return r.json(); }).then(function(d) {
+    if (d.ok) {
+      showStatus('ok', '✅ Токен сохранён! Аккаунт: ' + d.id + '. Можно закрыть вкладку.');
+      btn.textContent = 'Сохранено';
     } else {
-      setTimeout(poll, 2000);
+      showStatus('err', 'Ошибка: ' + (d.error || '?'));
+      btn.disabled = false;
+      btn.textContent = 'Сохранить токен';
     }
-  }).catch(()=>setTimeout(poll,3000));
-})();
+  }).catch(function(e) {
+    showStatus('err', 'Ошибка соединения: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = 'Сохранить токен';
+  });
+}
+
+function showStatus(type, msg) {
+  var s = document.getElementById('status');
+  s.className = 'status ' + type;
+  s.textContent = msg;
+}
 </script>
 </body>
 </html>`;
@@ -127,7 +169,6 @@ function saveToken(token) {
   const id = p.sub || p.id || p.email || `acc_${Date.now()}`;
 
   fs.mkdirSync(ACCOUNTS_DIR, { recursive: true });
-
   const accountDir = path.join(ACCOUNTS_DIR, id);
   fs.mkdirSync(accountDir, { recursive: true });
   fs.writeFileSync(path.join(accountDir, 'token.txt'), token, 'utf8');
@@ -163,7 +204,7 @@ async function readBody(req) {
 
 async function main() {
   let savedId = null;
-  const html = buildHtml(port);
+  const html = buildHtml();
 
   const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -174,12 +215,6 @@ async function main() {
     if (req.method === 'GET' && req.url === '/') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(html);
-      return;
-    }
-
-    if (req.method === 'GET' && req.url === '/status') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(savedId ? { done: true, id: savedId } : { done: false }));
       return;
     }
 
@@ -218,7 +253,7 @@ async function main() {
     console.log(`\n   ssh -L ${port}:localhost:${port} ${sshUser}@${hostname}\n`);
     console.log('2. Откройте в браузере на своём ПК:');
     console.log(`\n   http://localhost:${port}\n`);
-    console.log('3. Перетащите кнопку в закладки → войдите в Qwen → кликните закладку.');
+    console.log('3. Следуйте инструкциям на странице.');
     console.log('======================================================');
     console.log(`Таймаут: ${timeoutSec}с. Ожидаю токен...\n`);
   });
