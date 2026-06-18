@@ -1,64 +1,38 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { spawnSync } from 'child_process';
 
-import { initBrowser, shutdownBrowser, getBrowserContext } from '../browser/browser.js';
-import { extractAuthToken } from '../api/chat.js';
 import { loadTokens, saveTokens, markValid, removeToken } from '../api/tokenManager.js';
-import { loadAuthToken } from '../browser/session.js';
-import { logInfo, logError, logWarn } from '../logger/index.js';
+import { logInfo, logError } from '../logger/index.js';
 import { prompt } from './prompt.js';
 import { formatForgetMeAiWatermark } from './branding.js';
 import { SESSION_DIR, ACCOUNTS_DIR } from '../config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const AUTH_SCRIPT = path.resolve(__dirname, '..', '..', 'scripts', 'qwen_browser_auth.js');
 
-function ensureAccountDir(id) {
-    const accountDir = path.resolve(__dirname, '..', '..', SESSION_DIR, ACCOUNTS_DIR, id);
-    if (!fs.existsSync(accountDir)) fs.mkdirSync(accountDir, { recursive: true });
-    return accountDir;
+function runBrowserAuth() {
+    const result = spawnSync(process.execPath, [AUTH_SCRIPT], { stdio: 'inherit' });
+    return result.status === 0;
 }
 
 export async function addAccountInteractive() {
     logInfo('======================================================');
     logInfo('Добавление нового аккаунта Qwen');
     logInfo(formatForgetMeAiWatermark());
-    logInfo('Браузер откроется, войдите в систему, затем вернитесь к консоли.');
     logInfo('======================================================');
 
-    const ok = await initBrowser(true, true);
+    const ok = runBrowserAuth();
     if (!ok) {
-        logError('Не удалось запустить браузер.');
+        logError('Авторизация не была завершена.');
         return null;
     }
 
-    const ctx = getBrowserContext();
-    let token = await extractAuthToken(ctx, true);
-
-    if (!token) {
-        token = loadAuthToken();
-        if (token) logInfo('Токен получен из сохранённого файла.');
-    }
-
-    if (!token) {
-        logError('Токен не был получен. Аккаунт не добавлен.');
-        await shutdownBrowser();
-        return null;
-    }
-
-    await shutdownBrowser();
-
-    const id = 'acc_' + Date.now();
-    ensureAccountDir(id);
-    fs.writeFileSync(path.resolve(__dirname, '..', '..', SESSION_DIR, ACCOUNTS_DIR, id, 'token.txt'), token, 'utf8');
-
-    const list = loadTokens();
-    list.push({ id, token, resetAt: null });
-    saveTokens(list);
-
-    logInfo(`Аккаунт '${id}' добавлен. Всего аккаунтов: ${list.length}`);
+    const tokens = loadTokens();
+    logInfo(`Аккаунт добавлен. Всего аккаунтов: ${tokens.length}`);
     logInfo('======================================================');
-    return id;
+    return tokens[tokens.length - 1]?.id || null;
 }
 
 export async function interactiveAccountMenu() {
@@ -95,17 +69,16 @@ export async function reloginAccountInteractive() {
 
     logInfo(`Повторная авторизация для ${account.id}`);
     logInfo(formatForgetMeAiWatermark());
-    const ok = await initBrowser(true, true);
-    if (!ok) { logError('Не удалось запустить браузер.'); return; }
 
-    const token = await extractAuthToken(getBrowserContext(), true);
-    await shutdownBrowser();
+    const ok = runBrowserAuth();
+    if (!ok) { logError('Авторизация не была завершена.'); return; }
 
-    if (!token) { logError('Не удалось извлечь токен.'); return; }
-
-    markValid(account.id, token);
-    fs.writeFileSync(path.resolve(__dirname, '..', '..', SESSION_DIR, ACCOUNTS_DIR, account.id, 'token.txt'), token, 'utf8');
-    logInfo(`Токен обновлён для ${account.id}`);
+    const updated = loadTokens().find(t => t.id === account.id);
+    if (updated?.token) {
+        logInfo(`Токен обновлён для ${account.id}`);
+    } else {
+        logError('Токен для аккаунта не найден после авторизации.');
+    }
 }
 
 export async function removeAccountInteractive() {
