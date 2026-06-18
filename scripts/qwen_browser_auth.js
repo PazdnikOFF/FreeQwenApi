@@ -29,7 +29,8 @@ const ACCOUNTS_DIR = path.join(SESSION_DIR, 'accounts');
 const TOKENS_FILE = path.join(SESSION_DIR, 'tokens.json');
 
 function buildHtml() {
-  const consoleCode = `copy(localStorage.getItem('active_token'))`;
+  const tokenCode = `copy(localStorage.getItem('active_token'))`;
+  const cookieCode = `copy(document.cookie)`;
 
   return `<!DOCTYPE html>
 <html lang="ru">
@@ -81,21 +82,33 @@ function buildHtml() {
   <div class="step">
     <div class="num">2</div>
     <div class="step-body">
-      <p>Откройте консоль браузера (<strong>F12 → Console</strong>) и выполните:</p>
+      <p>Откройте консоль браузера (<strong>F12 → Console</strong>) и скопируйте токен:</p>
       <div class="code-block">
-        <code id="code">${consoleCode}</code>
-        <button class="copy-btn" onclick="copyCode()">Скопировать</button>
+        <code id="tokenCode">${tokenCode}</code>
+        <button class="copy-btn" onclick="copyField('tokenCode', this)">Скопировать</button>
       </div>
-      <p class="hint">Токен будет скопирован в буфер обмена.</p>
+      <p style="font-size:.875rem;margin-top:12px">Вставьте токен:</p>
+      <textarea id="tokenInput" placeholder="eyJ..."></textarea>
     </div>
   </div>
 
   <div class="step">
     <div class="num">3</div>
     <div class="step-body">
-      <p>Вставьте токен сюда и нажмите <strong>Сохранить</strong>:</p>
-      <textarea id="tokenInput" placeholder="eyJ..."></textarea>
-      <button class="submit-btn" onclick="submitToken()">Сохранить токен</button>
+      <p>Там же в консоли скопируйте куки:</p>
+      <div class="code-block">
+        <code id="cookieCode">${cookieCode}</code>
+        <button class="copy-btn" onclick="copyField('cookieCode', this)">Скопировать</button>
+      </div>
+      <p style="font-size:.875rem;margin-top:12px">Вставьте куки:</p>
+      <textarea id="cookieInput" placeholder="acw_tc=...; ctoken=..."></textarea>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">4</div>
+    <div class="step-body">
+      <button class="submit-btn" onclick="submitToken()">Сохранить</button>
     </div>
   </div>
 
@@ -103,17 +116,18 @@ function buildHtml() {
   <div id="status" class="status"></div>
 </div>
 <script>
-function copyCode() {
-  var code = document.getElementById('code').textContent;
-  navigator.clipboard.writeText(code).then(function() {
-    var btn = document.querySelector('.copy-btn');
+function copyField(id, btn) {
+  var text = document.getElementById(id).textContent;
+  navigator.clipboard.writeText(text).then(function() {
+    var orig = btn.textContent;
     btn.textContent = 'Скопировано!';
-    setTimeout(function(){ btn.textContent = 'Скопировать'; }, 2000);
+    setTimeout(function(){ btn.textContent = orig; }, 2000);
   });
 }
 
 function submitToken() {
   var token = document.getElementById('tokenInput').value.trim();
+  var cookies = document.getElementById('cookieInput').value.trim();
   if (!token.startsWith('eyJ') || token.split('.').length !== 3) {
     showStatus('err', 'Неверный формат токена. Убедитесь, что скопировали правильно.');
     return;
@@ -124,20 +138,20 @@ function submitToken() {
   fetch('/save', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({token: token})
+    body: JSON.stringify({token: token, cookies: cookies})
   }).then(function(r){ return r.json(); }).then(function(d) {
     if (d.ok) {
-      showStatus('ok', '✅ Токен сохранён! Аккаунт: ' + d.id + '. Можно закрыть вкладку.');
+      showStatus('ok', '✅ Сохранено! Аккаунт: ' + d.id + '. Можно закрыть вкладку.');
       btn.textContent = 'Сохранено';
     } else {
       showStatus('err', 'Ошибка: ' + (d.error || '?'));
       btn.disabled = false;
-      btn.textContent = 'Сохранить токен';
+      btn.textContent = 'Сохранить';
     }
   }).catch(function(e) {
     showStatus('err', 'Ошибка соединения: ' + e.message);
     btn.disabled = false;
-    btn.textContent = 'Сохранить токен';
+    btn.textContent = 'Сохранить';
   });
 }
 
@@ -164,7 +178,7 @@ function loadTokens() {
   catch { return []; }
 }
 
-function saveToken(token) {
+function saveToken(token, cookieString) {
   const p = decodeJwt(token);
   const id = p.sub || p.id || p.email || `acc_${Date.now()}`;
 
@@ -172,6 +186,14 @@ function saveToken(token) {
   const accountDir = path.join(ACCOUNTS_DIR, id);
   fs.mkdirSync(accountDir, { recursive: true });
   fs.writeFileSync(path.join(accountDir, 'token.txt'), token, 'utf8');
+
+  if (cookieString) {
+    const cookies = cookieString.split(';').map(pair => {
+      const [name, ...rest] = pair.trim().split('=');
+      return { name: name.trim(), value: rest.join('=').trim(), domain: 'chat.qwen.ai', path: '/' };
+    }).filter(c => c.name);
+    fs.writeFileSync(path.join(accountDir, 'cookies.json'), JSON.stringify(cookies, null, 2), 'utf8');
+  }
 
   const tokens = loadTokens();
   const existing = tokens.findIndex(t => t.id === id);
@@ -227,9 +249,11 @@ async function main() {
         return;
       }
       try {
-        savedId = saveToken(token);
+        const cookieString = String(body.cookies || '').trim();
+        savedId = saveToken(token, cookieString);
         console.log(`\n[auth] ✅ Токен сохранён: ${TOKENS_FILE}`);
         console.log(`[auth] Аккаунт: ${savedId}`);
+        if (cookieString) console.log(`[auth] Куки сохранены`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, id: savedId }));
         setTimeout(() => { server.close(); process.exit(0); }, 3000);

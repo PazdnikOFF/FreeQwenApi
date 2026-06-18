@@ -120,13 +120,39 @@ export const pagePool = {
         }
 
         const newPage = await getPage(context);
+
+        // Load saved cookies before navigation so WAF sees a valid session
+        try {
+            const { loadSession } = await import('../browser/session.js');
+            const { loadTokens: _lt } = await import('./tokenManager.js');
+            const _tokens = _lt();
+            if (_tokens.length > 0) {
+                await loadSession(newPage, _tokens[0].id);
+            }
+        } catch (e) {
+            logError('Ошибка при загрузке сессии перед навигацией', e);
+        }
+
         await newPage.goto(CHAT_PAGE_URL, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT });
 
-        if (!authToken) {
+        // Inject JWT into localStorage so the page appears logged-in to Qwen's WAF
+        if (authToken) {
             try {
-                authToken = await newPage.evaluate(() => localStorage.getItem('token'));
-                logInfo('Токен авторизации получен из браузера');
+                await newPage.evaluate((token) => {
+                    localStorage.setItem('active_token', token);
+                    localStorage.setItem('token', token);
+                }, authToken);
+                logInfo('Токен инжектирован в localStorage страницы');
+            } catch (e) {
+                logError('Ошибка при инжекции токена в localStorage', e);
+            }
+        } else {
+            try {
+                authToken = await newPage.evaluate(() =>
+                    localStorage.getItem('active_token') || localStorage.getItem('token')
+                );
                 if (authToken) {
+                    logInfo('Токен авторизации получен из браузера');
                     saveAuthToken(authToken);
                 }
             } catch (e) {
